@@ -127,6 +127,7 @@ class VWAPretest(bt.Strategy):
         self.datahigh = self.datas[0].high
         self.datalow = self.datas[0].low
         self.datavwap = self.datas[0].vwap
+        self.dataema_thirteen = self.datas[0].ema_thirteen
         
         # Candlestick tolerance - 0.1%
         self.tolerance = 0.001
@@ -139,6 +140,8 @@ class VWAPretest(bt.Strategy):
         self.max_loseable_value = 0.005 * self.account_value
         
         
+        self.stoploss_value = None
+        self.position_size = None
         
         #self.vwap = VWAP(self.data) # get VWAP 
         
@@ -157,15 +160,17 @@ class VWAPretest(bt.Strategy):
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             # An active Buy/Sell order has been submitted/accepted - Nothing to do
+            #self.log(f'ORDER ACCEPTED/SUBMITTED', dt=order.created.dt)
+            #self.order = order
             return
 
         # Check if an order has been completed
         # Attention: broker could reject order if not enough cash
         if order.status in [order.Completed]:
             if order.isbuy():
-                self.log(f'BUY EXECUTED, {order.executed.price:.2f}')
+                self.log(f'BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
             elif order.issell():
-                self.log(f'SELL EXECUTED, {order.executed.price:.2f}')
+                self.log(f'SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm: {order.executed.comm:.2f}')
             self.bar_executed = len(self)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
@@ -173,7 +178,12 @@ class VWAPretest(bt.Strategy):
 
         # Reset orders
         self.order = None
+        
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
 
+        self.log('OPERATION PROFIT, GROSS %.2f, NET %.2f' % (trade.pnl, trade.pnlcomm))
     def next(self):
         ''' Logic for using the built-in crossover indicator
 
@@ -237,6 +247,7 @@ class VWAPretest(bt.Strategy):
                 elif (self.data.vwap_retest_signal_rule_one[-1] == -1) and (self.dataclose[0] < self.dataclose[-1]) and (self.dataclose[0] < self.datavwap[0]):
                     self.data.vwap_confirmation_candle_signal_rule_two[0] = -1
             
+        
         # txt = list()
         # txt.append('{}'.format(len(self.data0)))
         # txt.append('{}'.format(self.data.datetime.datetime(-1)))
@@ -267,40 +278,79 @@ class VWAPretest(bt.Strategy):
                 # Price
                 purchase_price = self.dataclose[0]
                 # Calculate STOP LOSS
-                stop_loss = self.datavwap[0]*(1 - self.stoploss)
+                self.stoploss_value = self.datavwap[0]*(1 - self.stoploss)
                 # Calculate Position Sizing
-                position_size = int(round(self.max_loseable_value / abs(purchase_price - stop_loss)))
-                
-                self.log(f'BUY CREATED at price: {purchase_price:2f}, stop loss: {stop_loss:2f}, position size: {position_size}')
+                #self.position_size = round(self.max_loseable_value / abs(purchase_price - self.stoploss_value),2) # For Crypto
+                self.position_size = int(round(self.max_loseable_value / abs(purchase_price - self.stoploss_value)))
+                # If position_size is higher than account's value
+                if self.position_size * purchase_price > self.broker.get_cash():
+                    #self.position_size = round(self.broker.get_cash()/purchase_price,2)
+                    self.position_size = int(self.broker.get_cash()/purchase_price)
+               
+                print('----------------------------------------------------------------------------')
+                self.log(f'BUY CREATED at price: {purchase_price:2f}, stop loss: {self.stoploss_value:2f}, position size: {self.position_size}')
 
                 # Keep track of the created order to avoid a 2nd order
-                self.order = self.buy()
+                self.order = self.buy(size=self.position_size, price=purchase_price)
             
             # Otherwise if VWAP retest for SHORT Position with confirmation candle    
             elif self.data.vwap_confirmation_candle_signal_rule_two[0] == -1:
-                self.log(f'SELL CREATED {self.dataclose[0]:2f}')
+                #self.log(f'SELL CREATED {self.dataclose[0]:2f}')
                 
                 # Price
                 purchase_price = self.dataclose[0]
                 # Calculate STOP LOSS
-                stop_loss = self.datavwap[0]*(1 + self.stoploss)
+                self.stoploss_value = self.datavwap[0]*(1 + self.stoploss)
                 # Calculate Position Sizing
-                position_size = int(round(self.max_loseable_value / abs(purchase_price - stop_loss)))
+                #self.position_size = round(self.max_loseable_value / abs(purchase_price - self.stoploss_value),2) # For Crypto
+                self.position_size = int(round(self.max_loseable_value / abs(purchase_price - self.stoploss_value)))
+                # If position_size is higher than account's value
+                if self.position_size * purchase_price > self.broker.get_cash():
+                    #self.position_size = round(self.broker.get_cash()/purchase_price,2)
+                    self.position_size = int(self.broker.get_cash()/purchase_price)
                 
-                self.log(f'SELL CREATED at price: {purchase_price:2f}, stop loss: {stop_loss:2f}, position size: {position_size}')
+                print('----------------------------------------------------------------------------')
+                self.log(f'SELL CREATED at price: {purchase_price:2f}, stop loss: {self.stoploss_value:2f}, position size: {self.position_size}')
                 
                 # Keep track of the created order to avoid a 2nd order
-                self.order = self.sell()
+                self.order = self.sell(size=self.position_size, price=purchase_price)
             
         else:
-            # We are already in the market, look for a signal to CLOSE trades
-            if len(self) >= (self.bar_executed + 5):
-                
-                # Implement Soft Stop Loss
-                
-                # Detect Previous Swing High/ Swing Low
-                
-                # Take Partial Profit at 1%, 1.5% and 2%
-                
-                self.log(f'CLOSE CREATE {self.dataclose[0]:2f}')
+            # Monitor for Soft Stop Loss (2 Candles below/above stop loss) for LONG position
+            #print(self.position)
+            # LONG position and Close is below Stop Loss
+            if (self.position.size > 0) and (self.dataclose[0] <= self.stoploss_value):
+                self.data.soft_stop_loss[0] = self.data.soft_stop_loss[-1] + 1
+            # For SHORT position and Close is above Stop Loss
+            elif (self.position.size < 0) and (self.dataclose[0] >= self.stoploss_value):
+                self.data.soft_stop_loss[0] = self.data.soft_stop_loss[-1] + 1
+            else:
+                self.data.soft_stop_loss[0] = 0
+            
+            # Soft Stop Loss hit 2 times, close position
+            if self.data.soft_stop_loss[0] >= 2:
+                self.log(f'SOFT STOP LOSS HIT, CLOSE CREATE {self.dataclose[0]:2f}')
                 self.order = self.close()
+                        
+            # Take Profit when crosses EMA13 when in the green (check < or > entry price)
+            #print(self.position)
+            # LONG position, Close is crosses below EMA13 and entry price is lower than EMA13
+            if (self.position.size > 0) and ((self.dataclose[0] < self.dataema_thirteen[0]) and (self.dataclose[-1] > self.dataema_thirteen[-1])) and (self.position.price <= self.dataema_thirteen[0]):
+                self.log(f'CROSSES BELOW EMA13, CLOSE CREATE {self.dataclose[0]:2f}')
+                self.order = self.close()
+            # SHORT position, Close is crosses above EMA13 and entry price is higher than EMA13
+            elif (self.position.size < 0) and ((self.dataclose[0] > self.dataema_thirteen[0]) and (self.dataclose[-1] < self.dataema_thirteen[-1])) and (self.position.price >= self.dataema_thirteen[0]):
+                self.log(f'CROSSES ABOVE EMA13, CLOSE CREATE {self.dataclose[0]:2f}')
+                self.order = self.close()
+            
+            # # We are already in the market, look for a signal to CLOSE trades
+            # if len(self) >= (self.bar_executed + 5):
+                
+                # # Implement Soft Stop Loss
+                
+                # # Detect Previous Swing High/ Swing Low
+                
+                # # Take Partial Profit at 1%, 1.5% and 2%
+                
+                # self.log(f'CLOSE CREATE {self.dataclose[0]:2f}')
+                # self.order = self.close()
